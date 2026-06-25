@@ -407,7 +407,7 @@ const App: React.FC = () => {
           >
             <Menu size={24} />
           </button>
-          <div className="logo">PLN UP2D BANTEN CCTV-AI</div>
+          <div className="logo">EZVIZ CCTV STREAMING</div>
         </div>
         <div className="status-badge">
           <Info size={14} />
@@ -439,7 +439,7 @@ const App: React.FC = () => {
               <label><Key size={14} style={{ marginBottom: -2, marginRight: 4 }} /> Access Token</label>
               <input
                 type="password"
-                placeholder="Paste your accessToken here"
+                placeholder="Paste your accessToken here (Get it from Ezviz Developer)"
                 value={accessToken}
                 onChange={(e) => setAccessToken(e.target.value)}
               />

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Camera, Play, Video, Key, Calendar, AlertCircle, Info, Grid, Square, PlayCircle, Menu, Download } from 'lucide-react';
 import { format } from 'date-fns';
 import { EZUIKitPlayer } from 'ezuikit-js';
@@ -32,6 +32,39 @@ interface CameraPlayerProps {
   index: number;
   onStatusChange: (deviceSerial: string, channelNo: number, status: number) => void;
 }
+
+interface StoredToken {
+  token: string;
+  expiresAt: number;
+}
+
+const TOKEN_STORAGE_KEY = 'ezviz_access_token';
+const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+const saveTokenToStorage = (token: string) => {
+  const data: StoredToken = { token, expiresAt: Date.now() + TOKEN_TTL_MS };
+  localStorage.setItem(TOKEN_STORAGE_KEY, JSON.stringify(data));
+};
+
+const loadTokenFromStorage = (): string | null => {
+  try {
+    const raw = localStorage.getItem(TOKEN_STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw) as StoredToken;
+    if (Date.now() > data.expiresAt) {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+      return null;
+    }
+    return data.token;
+  } catch {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+    return null;
+  }
+};
+
+const clearTokenFromStorage = () => {
+  localStorage.removeItem(TOKEN_STORAGE_KEY);
+};
 
 const CameraPlayer: React.FC<CameraPlayerProps> = ({
   device, accessToken, region, mode, recType, playbackTime, playbackEndTime, isActive, index, onStatusChange
@@ -225,6 +258,33 @@ const App: React.FC = () => {
   const [isSingleRecActive, setIsSingleRecActive] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
+  // Token persistence: restore on app load and save when changed
+  const restoredTokenRef = useRef(false);
+  const hasAutoFetchedRef = useRef(false);
+
+  useEffect(() => {
+    const savedToken = loadTokenFromStorage();
+    if (savedToken) {
+      restoredTokenRef.current = true;
+      setAccessToken(savedToken);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (accessToken) {
+      saveTokenToStorage(accessToken);
+    }
+  }, [accessToken]);
+
+  const handleClearSavedToken = () => {
+    clearTokenFromStorage();
+    setAccessToken('');
+    setDevices([]);
+    setIsAllActive(false);
+    restoredTokenRef.current = false;
+    hasAutoFetchedRef.current = false;
+  };
+
   const updateDeviceStatus = (deviceSerial: string, channelNo: number, status: number) => {
     setDevices(prevDevices =>
       prevDevices.map(d =>
@@ -269,7 +329,7 @@ const App: React.FC = () => {
     }
   };
 
-  const fetchDevices = async () => {
+  const fetchDevices = useCallback(async () => {
     if (!accessToken) {
       setError("Access Token is required to fetch devices.");
       return;
@@ -302,7 +362,15 @@ const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [accessToken, region]);
+
+  // Auto-fetch devices once when a token is restored from storage
+  useEffect(() => {
+    if (restoredTokenRef.current && accessToken && devices.length === 0 && !hasAutoFetchedRef.current) {
+      hasAutoFetchedRef.current = true;
+      fetchDevices();
+    }
+  }, [accessToken, devices.length, fetchDevices]);
 
   // Background polling to update device status (Online/Offline) every 30 seconds
   useEffect(() => {
@@ -436,13 +504,36 @@ const App: React.FC = () => {
             </div>
 
             <div className="input-group">
-              <label><Key size={14} style={{ marginBottom: -2, marginRight: 4 }} /> Access Token</label>
+              <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span><Key size={14} style={{ marginBottom: -2, marginRight: 4 }} /> Access Token</span>
+                {accessToken && (
+                  <button
+                    onClick={handleClearSavedToken}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--text-muted)',
+                      cursor: 'pointer',
+                      fontSize: '0.75rem',
+                      padding: 0
+                    }}
+                    title="Clear saved token"
+                  >
+                    Clear
+                  </button>
+                )}
+              </label>
               <input
                 type="password"
-                placeholder="Paste your accessToken here (Get it from Ezviz Developer)"
+                placeholder="Paste your accessToken here"
                 value={accessToken}
                 onChange={(e) => setAccessToken(e.target.value)}
               />
+              {accessToken && (
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                  Token is saved in this browser for 7 days.
+                </div>
+              )}
             </div>
 
             <div className="input-group">

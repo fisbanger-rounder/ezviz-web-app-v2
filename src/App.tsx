@@ -107,14 +107,16 @@ const CameraPlayer: React.FC<CameraPlayerProps> = ({
   }, [localIsActive, mode, playbackTime, playbackEndTime]); // Re-run if these change while active
 
   const startStream = () => {
-    if (!accessToken) return;
+    const token = accessToken.trim();
+    if (!token) return;
 
     setIsLoading(true);
     setError(null);
     stopStream();
 
     const cleanSerial = device.deviceSerial.trim().toUpperCase();
-    const domain = region === 'https://open.ys7.com' ? 'open.ys7.com' : 'open.ezviz.com';
+    // EZUIKit v9 default host is open.ys7.com; the API region is controlled by env.domain.
+    const ezopenHost = 'open.ys7.com';
     const recSuffix = recType === 'cloud' ? '.cloud.rec' : '.rec';
 
     // Ensure time strings are exactly 14 characters (yyyyMMddHHmmss)
@@ -122,23 +124,28 @@ const CameraPlayer: React.FC<CameraPlayerProps> = ({
     const endFormatted = playbackEndTime.replace(/[-T:]/g, '').padEnd(14, '0');
 
     const url = mode === 'live'
-      ? `ezopen://${domain}/${cleanSerial}/${device.channelNo}.live`
-      : `ezopen://${domain}/${cleanSerial}/${device.channelNo}${recSuffix}?begin=${startFormatted}&end=${endFormatted}`;
+      ? `ezopen://${ezopenHost}/${cleanSerial}/${device.channelNo}.live`
+      : `ezopen://${ezopenHost}/${cleanSerial}/${device.channelNo}${recSuffix}?begin=${startFormatted}&end=${endFormatted}`;
+
+    console.log(`[EZVIZ] Starting ${mode} stream for ${cleanSerial}/${device.channelNo}`, { url, region });
 
     try {
       playerRef.current = new EZUIKitPlayer({
         id: playerId,
-        accessToken: accessToken,
+        accessToken: token,
         url: url,
-        template: mode === 'live' ? 'simple' : 'pcRec',
+        // pcLive/pcRec are the official PC templates and support autoplay.
+        // The 'simple' template only renders a video window and requires manual play.
+        template: mode === 'live' ? 'pcLive' : 'pcRec',
         width: '100%',
         height: '100%',
         autoplay: true,
         staticPath: '/ezuikit_static',
-        ...(region !== 'https://open.ys7.com' ? { env: { domain: region } } : {}),
+        language: 'en',
+        env: { domain: region },
         handleError: (err: unknown) => {
-          console.error(`EZUIKit Error (${device.deviceSerial}):`, err);
-          setError("Device Offline");
+          console.error(`[EZVIZ] EZUIKit Error (${device.deviceSerial}):`, err);
+          setError("Stream error");
           setIsLoading(false);
           setIsPlaying(false);
           if (device.status !== 0) {
@@ -146,6 +153,7 @@ const CameraPlayer: React.FC<CameraPlayerProps> = ({
           }
         },
         handleSuccess: () => {
+          console.log(`[EZVIZ] Stream success (${device.deviceSerial})`);
           setIsPlaying(true);
           setIsLoading(false);
           setError(null);
@@ -154,7 +162,24 @@ const CameraPlayer: React.FC<CameraPlayerProps> = ({
           }
         }
       });
-    } catch {
+
+      // Fallback event listeners in case handleSuccess/handleError are not emitted.
+      if (playerRef.current && typeof playerRef.current.on === 'function') {
+        playerRef.current.on('firstFrameDisplay', () => {
+          console.log(`[EZVIZ] firstFrameDisplay (${device.deviceSerial})`);
+          setIsPlaying(true);
+          setIsLoading(false);
+          setError(null);
+        });
+        playerRef.current.on('error', (err: unknown) => {
+          console.error(`[EZVIZ] player.on error (${device.deviceSerial}):`, err);
+          setError("Stream error");
+          setIsLoading(false);
+          setIsPlaying(false);
+        });
+      }
+    } catch (err) {
+      console.error(`[EZVIZ] Init error (${device.deviceSerial}):`, err);
       setError("Init error");
       setIsLoading(false);
       setIsPlaying(false);
@@ -164,8 +189,15 @@ const CameraPlayer: React.FC<CameraPlayerProps> = ({
   const stopStream = () => {
     if (playerRef.current) {
       try {
-        playerRef.current.stop();
-      } catch { /* ignore stop errors */ }
+        // Prefer destroy to fully release the player and its workers.
+        if (typeof (playerRef.current as { destroy?: () => void }).destroy === 'function') {
+          (playerRef.current as { destroy: () => void }).destroy();
+        } else {
+          playerRef.current.stop();
+        }
+      } catch (err) {
+        console.warn(`[EZVIZ] Stop/destroy error (${device.deviceSerial}):`, err);
+      }
       playerRef.current = null;
     }
     if (containerRef.current) {
